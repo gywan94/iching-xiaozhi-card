@@ -1,5 +1,6 @@
 #include "dayan_app.h"
 
+#include "board_hal.h"
 #include "dayan_data.h"
 #include "driver/gpio.h"
 #include "esp_check.h"
@@ -59,7 +60,7 @@ void DayanApp::InitUserButton() {
 }
 
 void DayanApp::InitIdleWatchdog() {
-    // 空闲看门狗：每 5 秒检查一次，超过 60 秒无任何交互则自动关机。
+    // 仅电池供电时：每 5 秒检查一次，超过 60 秒无交互则深睡关机；外接/充电不自动关机（与 xiaozhi-card 一致）
     xTaskCreatePinnedToCore(IdleTask, "dayan_idle", 4096, this, 2, &idle_task_, 0);
 }
 
@@ -70,13 +71,26 @@ void DayanApp::IdleTask(void* arg) {
         const int64_t now = esp_timer_get_time();
         const int64_t last = self->last_activity_us_.load();
         if (now - last >= kIdleTimeoutUs) {
-            ESP_LOGI(kTag, "idle timeout -> auto shutdown");
+            if (BoardIsExternalPower()) {
+                // 接通电源/充电中：不自动深睡
+                continue;
+            }
+            ESP_LOGI(kTag, "idle timeout (battery) -> auto shutdown");
             self->DoShutdown();
         }
     }
 }
 
 void DayanApp::DoShutdown() {
+    if (BoardIsExternalPower()) {
+        ESP_LOGI(kTag, "充电/外接电源，不进入深睡关机（同 xiaozhi-card 充电中不能关机）");
+        lv_async_call(
+            [](void* user_data) {
+                static_cast<DayanApp*>(user_data)->ui_.ShowChargingNoShutdownTip();
+            },
+            this);
+        return;
+    }
     // 显示关机页面，留足时间让墨水屏刷新完，再进入深睡眠。
     lv_async_call(
         [](void* user_data) {
@@ -85,6 +99,10 @@ void DayanApp::DoShutdown() {
         },
         this);
     vTaskDelay(pdMS_TO_TICKS(kShutdownDelayMs));
+    if (BoardHardShutdown()) {
+        // 正常情况下硬关机会掉电，不会返回；返回表示芯片不支持或执行失败。
+        ESP_LOGW(kTag, "hard shutdown did not power off, fallback to deep sleep");
+    }
     esp_sleep_enable_ext1_wakeup(BIT64(kUserButtonGpio), ESP_EXT1_WAKEUP_ANY_LOW);
     esp_deep_sleep_start();
 }

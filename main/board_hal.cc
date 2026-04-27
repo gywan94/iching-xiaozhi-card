@@ -13,6 +13,7 @@
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
 #include "bq27220.h"
+#include "aw32001.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <cstring>
@@ -37,10 +38,12 @@ constexpr gpio_num_t kTouchInt = GPIO_NUM_16;
 constexpr gpio_num_t kSdCs = GPIO_NUM_14;
 constexpr char kSdMountPoint[] = "/sdcard";
 constexpr char kLvglFontPath[] = "A:/sdcard/fonts/font_puhui_16_1.bin";
+constexpr uint8_t kAw32001Address = 0x49;
 
 bool g_sd_mounted = false;
 i2c_master_bus_handle_t g_i2c_bus = nullptr;
 Bq27220* g_gauge = nullptr;
+Aw32001* g_charger = nullptr;
 }  // namespace
 
 esp_err_t BoardInitDisplayAndTouch(BoardDisplayContext& ctx) {
@@ -180,6 +183,24 @@ esp_err_t BoardInitDisplayAndTouch(BoardDisplayContext& ctx) {
             ESP_LOGW(kTag, "bq27220 detect failed");
         }
     }
+    if (g_charger == nullptr && g_i2c_bus != nullptr) {
+        const esp_err_t probe_ret = i2c_master_probe(g_i2c_bus, kAw32001Address, pdMS_TO_TICKS(100));
+        if (probe_ret == ESP_OK) {
+            g_charger = new Aw32001(g_i2c_bus, kAw32001Address);
+            // 与 xiaozhi-card 初始化策略对齐
+            g_charger->SetShippingMode(false);               // 关闭运输模式
+            g_charger->SetNtcFunction(false);                // 未使用 NTC
+            g_charger->SetDischargeCurrent(2800);            // 最大放电电流
+            g_charger->SetChargeCurrent(260);                // 最大充电电流
+            g_charger->SetChargeVoltage(4200);               // 满电电压 4.2V
+            g_charger->SetPreChargeCurrent(31);              // 预充电电流
+            g_charger->SetPrechargeToFastchargeThreshold(0); // 预充转快充阈值
+            g_charger->SetCharge(true);                      // 开启充电
+            ESP_LOGI(kTag, "aw32001 charger detected");
+        } else {
+            ESP_LOGW(kTag, "aw32001 not found, hard shutdown disabled");
+        }
+    }
     return ESP_OK;
 }
 
@@ -236,4 +257,26 @@ int BoardGetBatteryLevelPercent() {
         return 100;
     }
     return static_cast<int>(raw);
+}
+
+bool BoardIsExternalPower() {
+    // 与 xiaozhi-card 一致：优先依据 AW32001 充电状态判断是否外接供电
+    if (g_charger != nullptr) {
+        return g_charger->GetChargeState() != 0;
+    }
+    // 回退：若无 AW32001，再用 BQ27220 状态近似判断
+    if (g_gauge == nullptr || !g_gauge->detect()) {
+        return false;
+    }
+    return g_gauge->getIsCharging();
+}
+
+bool BoardHardShutdown() {
+    if (g_charger == nullptr) {
+        return false;
+    }
+    // 与 xiaozhi-card 一致：进入 AW32001 运输模式实现硬关机。
+    g_charger->SetShippingMode(true);
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    return true;
 }

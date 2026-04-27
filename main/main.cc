@@ -3,6 +3,7 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "nvs_flash.h"
 
 extern "C" void app_main(void) {
@@ -13,6 +14,9 @@ extern "C" void app_main(void) {
         err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
+
+    // 插 USB/接充电器给板上电时 MCU 会冷启动或复位，从此入口运行即“接通电源就开机”
+    ESP_LOGI("dayan_main", "reset reason=%d", (int)esp_reset_reason());
 
     BoardDisplayContext board_ctx;
     // 初始化屏幕、触摸、LVGL，以及电量计（BQ27220）探测。

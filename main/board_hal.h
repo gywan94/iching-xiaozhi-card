@@ -19,3 +19,7 @@ esp_err_t BoardInitStorage();
 bool BoardStorageMounted();
 const char* BoardLvglFontPath();
 int BoardGetBatteryLevelPercent();
+// 有外部充电/市电等供电（ fuel gauge 非放电）时为 true；无 BQ 或探测失败为 false
+bool BoardIsExternalPower();
+// 使用 AW32001 进入运输模式硬关机；成功触发后设备会掉电
+bool BoardHardShutdown();

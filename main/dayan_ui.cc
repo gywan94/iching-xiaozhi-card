@@ -295,6 +295,38 @@ void DayanUi::ShowShutdown() {
     lv_screen_load(scr_shutdown_);
 }
 
+namespace {
+void OnChargingTipTimer(lv_timer_t* timer) {
+    auto* box = static_cast<lv_obj_t*>(lv_timer_get_user_data(timer));
+    if (box != nullptr) {
+        lv_obj_del(box);
+    }
+    lv_timer_delete(timer);
+}
+}  // namespace
+
+void DayanUi::ShowChargingNoShutdownTip() {
+    lv_obj_t* box = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(box, 168, 72);
+    lv_obj_center(box);
+    lv_obj_set_style_bg_color(box, lv_color_white(), 0);
+    lv_obj_set_style_border_width(box, 1, 0);
+    lv_obj_set_style_border_color(box, lv_color_black(), 0);
+    lv_obj_set_style_text_font(box, text_font_, 0);
+    lv_obj_set_style_text_color(box, lv_color_black(), 0);
+    lv_obj_t* t1 = lv_label_create(box);
+    lv_obj_set_style_text_font(t1, text_font_, 0);
+    lv_label_set_text(t1, "充电中");
+    lv_obj_align(t1, LV_ALIGN_TOP_MID, 0, 6);
+    lv_obj_t* t2 = lv_label_create(box);
+    lv_obj_set_style_text_font(t2, text_font_, 0);
+    lv_label_set_text(t2, "不能关机");
+    lv_obj_align(t2, LV_ALIGN_TOP_MID, 0, 32);
+    lv_refr_now(nullptr);
+    lv_timer_t* timer = lv_timer_create(OnChargingTipTimer, 2000, box);
+    lv_timer_set_repeat_count(timer, 1);
+}
+
 bool DayanUi::ResolveGapClick(int x, int y, int stick_count, int& out_left_count) const {
     // 只有点在“蓍草缝隙”才算有效点击；点在草身或外部均忽略。
     lv_area_t box;

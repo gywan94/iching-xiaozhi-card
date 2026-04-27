@@ -17,6 +17,8 @@ public:
     void UpdateSplitInfo(int left_count, int right_count);
     void ShowResult(const GuaDetails& details, const DayanEngine& engine);
     void ShowShutdown();
+    // 与 xiaozhi-card 一致：充电/外接电源时无法关机，提示后自动消失
+    void ShowChargingNoShutdownTip();
     void UpdateWelcomeBattery();
 
     std::function<void()> on_welcome_confirm;
