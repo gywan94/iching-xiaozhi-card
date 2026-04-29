@@ -31,5 +31,5 @@ private:
     TaskHandle_t idle_task_ = nullptr;
     std::atomic<int64_t> last_activity_us_{0};
     // 仅未外接充电（电池供电）时生效；有充电/市电时 IdleTask 不进入深睡
-    static constexpr int64_t kIdleTimeoutUs = 60LL * 1000 * 1000; // 60 秒
+    static constexpr int64_t kIdleTimeoutUs = 3LL * 60 * 1000 * 1000; // 3 分钟无操作
 };

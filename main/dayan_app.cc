@@ -60,7 +60,7 @@ void DayanApp::InitUserButton() {
 }
 
 void DayanApp::InitIdleWatchdog() {
-    // 仅电池供电时：每 5 秒检查一次，超过 60 秒无交互则深睡关机；外接/充电不自动关机（与 xiaozhi-card 一致）
+    // 仅电池供电时：每 5 秒检查一次，超过 3 分钟无交互则关机（硬关机路径同 xiaozhi-card）；外接/充电不误触关机
     xTaskCreatePinnedToCore(IdleTask, "dayan_idle", 4096, this, 2, &idle_task_, 0);
 }
 
