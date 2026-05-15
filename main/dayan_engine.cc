@@ -114,3 +114,9 @@ std::string DayanEngine::GetRawLineCode() const {
     }
     return raw;
 }
+
+void DayanEngine::GetYaoValues(int out_values[6]) const {
+    for (int i = 0; i < 6; ++i) {
+        out_values[i] = yijing_result_[i];
+    }
+}

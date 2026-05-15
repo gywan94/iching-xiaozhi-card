@@ -1,0 +1,32 @@
+# Build artifacts
+build/
+build-*/
+
+# ESP-IDF generated files
+sdkconfig
+sdkconfig.old
+sdkconfig.defaults.old
+dependencies.lock
+
+# Managed components (will be downloaded by idf.py)
+managed_components/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log

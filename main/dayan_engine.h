@@ -23,6 +23,8 @@ public:
     std::string GetLineCode() const;
     std::string GetChangedLineCode() const;
     std::string GetRawLineCode() const;
+    // 获取6爻原始值（6/7/8/9），index 0=初爻，5=上爻
+    void GetYaoValues(int out_values[6]) const;
 
 private:
     static int Guiji(int qian_zong, int qianshu);

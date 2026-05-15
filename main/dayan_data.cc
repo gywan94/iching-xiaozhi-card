@@ -191,6 +191,50 @@ std::string ToJsonArrayString(const std::vector<std::string>& lines) {
 }
 }  // namespace
 
+std::string GetGuaYaoCiByName(const std::string& gua_name) {
+    // 遍历查找匹配的卦名
+    for (const auto& [bin_key, entry] : kIChingData) {
+        if (gua_name == entry.name) {
+            ParsedEntry parsed;
+            if (!ParseEntryText(entry.text, parsed)) {
+                return "数据解析失败";
+            }
+            std::ostringstream oss;
+            // 卦辞 (key 0)
+            auto it_gua_ci = parsed.yao.find(0);
+            if (it_gua_ci != parsed.yao.end()) {
+                oss << "【卦辞】\n" << it_gua_ci->second << "\n\n";
+            }
+            // 六爻爻辞 (key 1-6)
+            const char* yao_names[] = {"", "初爻", "二爻", "三爻", "四爻", "五爻", "上爻"};
+            for (int i = 1; i <= 6; ++i) {
+                auto it = parsed.yao.find(i);
+                if (it != parsed.yao.end()) {
+                    oss << "【" << yao_names[i] << "】\n" << it->second << "\n\n";
+                }
+            }
+            // 彖辞 (key 7)
+            auto it_tuan = parsed.yao.find(7);
+            if (it_tuan != parsed.yao.end()) {
+                oss << "【彖辞】\n" << it_tuan->second;
+            }
+            return oss.str();
+        }
+    }
+    return "未找到卦象数据";
+}
+
+// 包含从HTML提取的卦详细文本数据
+#include "generated/gua_detail_text.inc"
+
+std::string GetGuaDetailTextByName(const std::string& gua_name) {
+    const auto it = kGuaDetailText.find(gua_name);
+    if (it != kGuaDetailText.end()) {
+        return it->second;
+    }
+    return "未找到卦象详细解读";
+}
+
 bool GetBookGuaDetails(const std::string& raw_line_code, GuaDetails& out) {
     const std::string origin_code = ToBinaryCode(raw_line_code);
     const std::string changed_static_code = ToChangedStaticCode(raw_line_code);
@@ -253,7 +297,8 @@ bool GetBookGuaDetails(const std::string& raw_line_code, GuaDetails& out) {
         lines = {gua_pair, explain, "主要看【" + out.changed_name + "】卦的彖辞。", changed_tuan};
     }
     out.yao_text = JoinLines(lines);
-    out.changed_yao.clear();
+    // 变卦爻辞：使用变卦的JSON格式爻辞
+    out.changed_yao = changed_entry.yao_json;
     out.guayao = raw_line_code;
     out.getgua = out.origin_name;
     out.g_gua = out.changed_name;

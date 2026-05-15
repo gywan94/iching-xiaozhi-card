@@ -1,10 +1,12 @@
 #include "dayan_ui.h"
+#include "dayan_data.h"
 #include "board_hal.h"
 #include "font_awesome_symbols.h"
 #include "esp_epd_gdey027t91.h"
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -154,9 +156,58 @@ void DayanUi::Build() {
     lv_obj_set_style_text_color(scr_result_, lv_color_black(), 0);
     lv_obj_clear_flag(scr_result_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scrollbar_mode(scr_result_, LV_SCROLLBAR_MODE_OFF);
+
+    // ========== 结果页布局 ==========
+    // 屏幕: 176x264
+    //
+    // ┌─────────────────────────────┐
+    // │ 本卦名  [图] → 变卦名 [图]  │  y: 0~32 (顶部区域)
+    // ├─────────────────────────────┤
+    // │ 原始爻值: 787978             │
+    // │ 【本卦】乾                   │
+    // │ 本卦爻辞...                  │  y: 34~228 (文本区域 194px)
+    // │ 【变卦】坤                   │
+    // │ 变卦爻辞...                  │
+    // │ 断语内容...                  │
+    // ├─────────────────────────────┤
+    // │      [重新起卦]             │  y: 230~262
+    // └─────────────────────────────┘
+
+    // 顶部区域: 卦名+卦象 (y: 0~32)
+    result_hex_area_ = lv_obj_create(scr_result_);
+    lv_obj_set_size(result_hex_area_, 174, 32);
+    lv_obj_align(result_hex_area_, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_opa(result_hex_area_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(result_hex_area_, 0, 0);
+    lv_obj_set_style_pad_all(result_hex_area_, 0, 0);
+    lv_obj_clear_flag(result_hex_area_, LV_OBJ_FLAG_SCROLLABLE);
+
+    // 第一行四等分布局 (屏幕宽176，每格44)
+    // 第1格(0-43): 本卦名 | 第2格(44-87): 本卦图 | 第3格(88-131): 变卦名 | 第4格(132-175): 变卦图
+
+    // 本卦名（第1格，可点击）
+    bengua_name_label_ = lv_label_create(result_hex_area_);
+    lv_obj_set_style_text_font(bengua_name_label_, text_font_, 0);
+    lv_obj_set_pos(bengua_name_label_, 6, 8);
+    lv_label_set_text(bengua_name_label_, "本卦");
+    lv_obj_add_flag(bengua_name_label_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(bengua_name_label_, OnBenguaClick, LV_EVENT_CLICKED, this);
+
+    // 变卦名（第3格，可点击）
+    biangua_name_label_ = lv_label_create(result_hex_area_);
+    lv_obj_set_style_text_font(biangua_name_label_, text_font_, 0);
+    lv_obj_set_pos(biangua_name_label_, 94, 8);
+    lv_label_set_text(biangua_name_label_, "变卦");
+    lv_obj_add_flag(biangua_name_label_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(biangua_name_label_, OnBianguaClick, LV_EVENT_CLICKED, this);
+
+    // 原始爻值标签（放到文本区域内显示，不在顶部区域）
+    raw_yao_label_ = nullptr;  // 不再作为独立标签使用
+
+    // 文本滚动区域: 包含原始爻值+爻辞+断语 (y: 34~228, 高度194)
     result_scroll_ = lv_obj_create(scr_result_);
-    lv_obj_set_size(result_scroll_, 172, 208);
-    lv_obj_align(result_scroll_, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_set_size(result_scroll_, 174, 194);
+    lv_obj_align(result_scroll_, LV_ALIGN_TOP_MID, 0, 34);
     lv_obj_set_style_border_width(result_scroll_, 1, 0);
     lv_obj_set_style_border_color(result_scroll_, lv_color_black(), 0);
     lv_obj_set_style_radius(result_scroll_, 0, 0);
@@ -167,19 +218,68 @@ void DayanUi::Build() {
     lv_obj_set_scrollbar_mode(result_scroll_, LV_SCROLLBAR_MODE_AUTO);
     result_text_ = lv_label_create(result_scroll_);
     lv_obj_set_style_text_font(result_text_, text_font_, 0);
-    lv_obj_set_width(result_text_, 160);
+    lv_obj_set_width(result_text_, 164);
     lv_label_set_long_mode(result_text_, LV_LABEL_LONG_WRAP);
     lv_obj_align(result_text_, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_set_style_text_align(result_text_, LV_TEXT_ALIGN_LEFT, 0);
     lv_label_set_text(result_text_, "结果待生成");
+
+    // 重新起卦按钮 (y: 230~262)
     lv_obj_t* result_btn = lv_btn_create(scr_result_);
-    lv_obj_set_size(result_btn, 90, 36);
-    lv_obj_align(result_btn, LV_ALIGN_BOTTOM_MID, 0, -15);
+    lv_obj_set_size(result_btn, 90, 32);
+    lv_obj_align(result_btn, LV_ALIGN_TOP_MID, 0, 230);
     lv_obj_add_event_cb(result_btn, OnResultBtn, LV_EVENT_CLICKED, this);
     lv_obj_t* result_btn_label = lv_label_create(result_btn);
     lv_obj_set_style_text_font(result_btn_label, text_font_, 0);
     lv_label_set_text(result_btn_label, "重新起卦");
     lv_obj_center(result_btn_label);
+
+    // 详情页
+    scr_detail_ = lv_obj_create(nullptr);
+    lv_obj_set_style_text_font(scr_detail_, text_font_, 0);
+    lv_obj_set_style_bg_color(scr_detail_, lv_color_white(), 0);
+    lv_obj_set_style_text_color(scr_detail_, lv_color_black(), 0);
+    lv_obj_clear_flag(scr_detail_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(scr_detail_, LV_SCROLLBAR_MODE_OFF);
+    // 详情页顶部：返回按钮 + 卦名
+    lv_obj_t* detail_header = lv_obj_create(scr_detail_);
+    lv_obj_set_size(detail_header, 172, 30);
+    lv_obj_align(detail_header, LV_ALIGN_TOP_MID, 0, 2);
+    lv_obj_set_style_bg_opa(detail_header, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(detail_header, 0, 0);
+    lv_obj_set_style_pad_all(detail_header, 0, 0);
+    lv_obj_clear_flag(detail_header, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t* back_btn = lv_btn_create(detail_header);
+    lv_obj_set_size(back_btn, 50, 26);
+    lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 2, 0);
+    lv_obj_add_event_cb(back_btn, OnDetailBack, LV_EVENT_CLICKED, this);
+    lv_obj_t* back_label = lv_label_create(back_btn);
+    lv_obj_set_style_text_font(back_label, text_font_, 0);
+    lv_label_set_text(back_label, "返回");
+    lv_obj_center(back_label);
+    lv_obj_t* detail_title = lv_label_create(detail_header);
+    lv_obj_set_style_text_font(detail_title, text_font_, 0);
+    lv_obj_align(detail_title, LV_ALIGN_CENTER, 0, 0);
+    lv_label_set_text(detail_title, "卦详情");
+    // 详情页内容滚动区
+    detail_scroll_ = lv_obj_create(scr_detail_);
+    lv_obj_set_size(detail_scroll_, 172, 220);
+    lv_obj_align(detail_scroll_, LV_ALIGN_TOP_MID, 0, 34);
+    lv_obj_set_style_border_width(detail_scroll_, 1, 0);
+    lv_obj_set_style_border_color(detail_scroll_, lv_color_black(), 0);
+    lv_obj_set_style_radius(detail_scroll_, 0, 0);
+    lv_obj_set_style_pad_all(detail_scroll_, 4, 0);
+    lv_obj_set_scroll_dir(detail_scroll_, LV_DIR_VER);
+    lv_obj_add_flag(detail_scroll_, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    lv_obj_add_flag(detail_scroll_, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_set_scrollbar_mode(detail_scroll_, LV_SCROLLBAR_MODE_AUTO);
+    detail_text_ = lv_label_create(detail_scroll_);
+    lv_obj_set_style_text_font(detail_text_, text_font_, 0);
+    lv_obj_set_width(detail_text_, 160);
+    lv_label_set_long_mode(detail_text_, LV_LABEL_LONG_WRAP);
+    lv_obj_align(detail_text_, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_text_align(detail_text_, LV_TEXT_ALIGN_LEFT, 0);
+    lv_label_set_text(detail_text_, "详情内容");
 
     scr_shutdown_ = lv_obj_create(nullptr);
     lv_obj_set_style_text_font(scr_shutdown_, text_font_, 0);
@@ -280,19 +380,112 @@ void DayanUi::UpdateSplitInfo(int left_count, int right_count) {
 
 void DayanUi::ShowResult(const GuaDetails& details, const DayanEngine& engine) {
     lv_screen_load(scr_result_);
-    (void)engine;
+    // 清除上次的卦象图对象
+    for (lv_obj_t* obj : hexagram_objs_) {
+        if (obj != nullptr) {
+            lv_obj_del(obj);
+        }
+    }
+    hexagram_objs_.clear();
+    // 获取爻值数组
+    int yao_values[6] = {0};
+    engine.GetYaoValues(yao_values);
+    memcpy(current_yao_values_, yao_values, sizeof(current_yao_values_));
+    // 绘制本卦（第2格居中）：6/9互换前的原始卦象
+    // 第2格中心x=66，卦图宽16，左边缘=66-8=58
+    DrawHexagram(result_hex_area_, yao_values, 58, 2, 16);
+    // 绘制变卦（第4格居中）：6/9互换
+    int changed_values[6];
+    for (int i = 0; i < 6; ++i) {
+        if (yao_values[i] == 6) changed_values[i] = 7;
+        else if (yao_values[i] == 9) changed_values[i] = 8;
+        else changed_values[i] = yao_values[i];
+    }
+    memcpy(current_changed_yao_values_, changed_values, sizeof(current_changed_yao_values_));
+    // 第4格中心x=154，卦图宽16，左边缘=154-8=146
+    DrawHexagram(result_hex_area_, changed_values, 146, 2, 16);
+    // 更新卦名
+    lv_label_set_text(bengua_name_label_, details.getgua.c_str());
+    lv_label_set_text(biangua_name_label_, details.g_gua.c_str());
+    // 存储卦象信息用于详情页
+    current_bengua_name_ = details.getgua;
+    current_biangua_name_ = details.g_gua;
+    current_bengua_content_ = details.yao_results;
+    current_biangua_content_ = details.yao_results;
+    // 结果页内容：原始爻值+本卦爻辞+变卦爻辞+动爻信息
+    char yao_str[32];
+    std::snprintf(yao_str, sizeof(yao_str), "%d%d%d%d%d%d",
+                  yao_values[5], yao_values[4], yao_values[3],
+                  yao_values[2], yao_values[1], yao_values[0]);
     std::string out;
-    out += "起卦原始爻值：\n" + details.guayao + "\n\n";
-    out += "本卦：\n" + details.getgua + "\n\n";
-    out += "变卦：\n" + details.g_gua + "\n\n";
-    out += "爻辞原始数据：\n" + details.yao_results + "\n\n";
-    out += "断语结果：\n" + details.explaination2;
+    out += "原始爻值: " + std::string(yao_str) + "\n\n";
+    out += "【本卦】" + details.getgua + "\n";
+    out += details.yao_results + "\n\n";
+    out += "【变卦】" + details.g_gua + "\n";
+    out += details.changed_yao + "\n\n";
+    out += details.yao_text;
     lv_label_set_text(result_text_, out.c_str());
     lv_obj_scroll_to_y(result_scroll_, 0, LV_ANIM_OFF);
 }
 
 void DayanUi::ShowShutdown() {
     lv_screen_load(scr_shutdown_);
+}
+
+void DayanUi::DrawHexagram(lv_obj_t* parent, const int yao_values[6], int x, int y, int width) {
+    // 紧凑卦象图：整体约 28x30 像素
+    constexpr int kLineHeight = 3;   // 爻线高度
+    constexpr int kLineGap = 1;      // 爻间距
+    constexpr int kYinGap = 4;       // 阴爻中间空隙
+    const int total_height = 6 * kLineHeight + 5 * kLineGap;
+    // 从下到上绘制：index 0=初爻(bottom)，5=上爻(top)
+    for (int i = 0; i < 6; ++i) {
+        const int yao = yao_values[i];
+        const int line_y = y + total_height - (i + 1) * (kLineHeight + kLineGap) + kLineGap;
+        const bool is_yang = (yao == 7 || yao == 9);
+        const bool is_moving = (yao == 6 || yao == 9);
+        if (is_yang) {
+            // 阳爻：一条实线（用细矩形模拟）
+            lv_obj_t* line = lv_obj_create(parent);
+            lv_obj_set_size(line, width, kLineHeight);
+            lv_obj_set_pos(line, x, line_y);
+            lv_obj_set_style_bg_color(line, lv_color_black(), 0);
+            lv_obj_set_style_border_width(line, 0, 0);
+            lv_obj_set_style_radius(line, 0, 0);
+            lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
+            hexagram_objs_.push_back(line);
+        } else {
+            // 阴爻：两段线，中间留空
+            const int seg_width = (width - kYinGap) / 2;
+            lv_obj_t* left = lv_obj_create(parent);
+            lv_obj_set_size(left, seg_width, kLineHeight);
+            lv_obj_set_pos(left, x, line_y);
+            lv_obj_set_style_bg_color(left, lv_color_black(), 0);
+            lv_obj_set_style_border_width(left, 0, 0);
+            lv_obj_set_style_radius(left, 0, 0);
+            lv_obj_clear_flag(left, LV_OBJ_FLAG_SCROLLABLE);
+            hexagram_objs_.push_back(left);
+            lv_obj_t* right = lv_obj_create(parent);
+            lv_obj_set_size(right, seg_width, kLineHeight);
+            lv_obj_set_pos(right, x + seg_width + kYinGap, line_y);
+            lv_obj_set_style_bg_color(right, lv_color_black(), 0);
+            lv_obj_set_style_border_width(right, 0, 0);
+            lv_obj_set_style_radius(right, 0, 0);
+            lv_obj_clear_flag(right, LV_OBJ_FLAG_SCROLLABLE);
+            hexagram_objs_.push_back(right);
+        }
+        if (is_moving) {
+            // 动爻标记：小圆点（2x2）
+            lv_obj_t* dot = lv_obj_create(parent);
+            lv_obj_set_size(dot, 3, 3);
+            lv_obj_set_pos(dot, x + width + 1, line_y + (kLineHeight - 3) / 2);
+            lv_obj_set_style_bg_color(dot, lv_color_black(), 0);
+            lv_obj_set_style_border_width(dot, 0, 0);
+            lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+            lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
+            hexagram_objs_.push_back(dot);
+        }
+    }
 }
 
 namespace {
@@ -442,4 +635,40 @@ void DayanUi::OnResultBtn(lv_event_t* e) {
     if (self->on_result_restart) {
         self->on_result_restart();
     }
+}
+
+void DayanUi::OnBenguaClick(lv_event_t* e) {
+    auto* self = static_cast<DayanUi*>(lv_event_get_user_data(e));
+    if (self != nullptr) {
+        self->ShowGuaDetail(self->current_bengua_name_.c_str(), GetGuaDetailTextByName(self->current_bengua_name_));
+    }
+}
+
+void DayanUi::OnBianguaClick(lv_event_t* e) {
+    auto* self = static_cast<DayanUi*>(lv_event_get_user_data(e));
+    if (self != nullptr) {
+        self->ShowGuaDetail(self->current_biangua_name_.c_str(), GetGuaDetailTextByName(self->current_biangua_name_));
+    }
+}
+
+void DayanUi::OnDetailBack(lv_event_t* e) {
+    auto* self = static_cast<DayanUi*>(lv_event_get_user_data(e));
+    if (self != nullptr && self->on_detail_back) {
+        self->on_detail_back();
+    }
+}
+
+void DayanUi::ShowGuaDetail(const char* gua_name, const std::string& gua_content) {
+    lv_screen_load(scr_detail_);
+    // 更新标题
+    lv_obj_t* header = lv_obj_get_child(scr_detail_, 0);
+    if (header != nullptr) {
+        lv_obj_t* title = lv_obj_get_child(header, 2);
+        if (title != nullptr) {
+            lv_label_set_text(title, gua_name);
+        }
+    }
+    // 更新内容
+    lv_label_set_text(detail_text_, gua_content.c_str());
+    lv_obj_scroll_to_y(detail_scroll_, 0, LV_ANIM_OFF);
 }

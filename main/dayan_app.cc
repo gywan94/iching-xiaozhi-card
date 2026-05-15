@@ -36,6 +36,9 @@ void DayanApp::Start() {
     };
     ui_.on_divination_click = [this](int x, int y) { UpdateActivity(); OnDivinationClicked(x, y); };
     ui_.on_result_restart = [this]() { UpdateActivity(); ui_.ShowWelcome(); };
+    ui_.on_detail_back = [this]() {
+        ShowResultPage();
+    };
 
     lv_async_call(
         [](void* user_data) {
