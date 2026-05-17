@@ -9,6 +9,7 @@ idf_component_register(
         "dayan_engine.cc"
         "dayan_data.cc"
         "font_iching_patch_16_1.c"
+        "shutdown_image.c"
         "${XIAOZHI_CLAW_ROOT}/components/guage_bq27220/bq27220.cpp"
         "${XIAOZHI_CLAW_ROOT}/components/charger_aw32001/aw32001.cpp"
         "${XIAOZHI_CLAW_ROOT}/components/xiaozhi-fonts/src/font_puhui_16_1.c"

@@ -259,6 +259,24 @@ int BoardGetBatteryLevelPercent() {
     return static_cast<int>(raw);
 }
 
+int BoardGetBatteryVoltageMv() {
+    if (g_gauge == nullptr || !g_gauge->detect()) {
+        return -1;
+    }
+    return static_cast<int>(g_gauge->getVolt(VOLT));
+}
+
+int BoardGetChargeState() {
+    if (g_charger == nullptr) {
+        return -1;
+    }
+    return static_cast<int>(g_charger->GetChargeState());
+}
+
+bool BoardIsGaugePresent() {
+    return g_gauge != nullptr && g_gauge->detect();
+}
+
 bool BoardIsExternalPower() {
     // 与 xiaozhi-card 一致：优先依据 AW32001 充电状态判断是否外接供电
     if (g_charger != nullptr) {
@@ -271,12 +289,12 @@ bool BoardIsExternalPower() {
     return g_gauge->getIsCharging();
 }
 
-bool BoardHardShutdown() {
+void BoardHardShutdown() {
     if (g_charger == nullptr) {
-        return false;
+        ESP_LOGW(kTag, "aw32001 unavailable, skip hard shutdown");
+        return;
     }
-    // 与 xiaozhi-card 一致：进入 AW32001 运输模式实现硬关机。
+    // 与 xiaozhi-card 一致：进入 AW32001 运输模式，等待 FET 切断 SYS 轨。
     g_charger->SetShippingMode(true);
     vTaskDelay(pdMS_TO_TICKS(3000));
-    return true;
 }

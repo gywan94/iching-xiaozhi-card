@@ -27,6 +27,8 @@ public:
     // 与 xiaozhi-card 一致：充电/外接电源时无法关机，提示后自动消失
     void ShowChargingNoShutdownTip();
     void UpdateWelcomeBattery();
+    // 系统级提示页（低电倒计时 / 电池过放等场景），title 居上 body 居中显示。
+    void ShowSystemTip(const char* title, const char* body);
 
     std::function<void()> on_welcome_confirm;
     std::function<void()> on_intro_start;
@@ -54,6 +56,9 @@ private:
     lv_obj_t* scr_result_ = nullptr;
     lv_obj_t* scr_shutdown_ = nullptr;
     lv_obj_t* scr_detail_ = nullptr;
+    lv_obj_t* scr_system_tip_ = nullptr;
+    lv_obj_t* system_tip_title_ = nullptr;
+    lv_obj_t* system_tip_body_ = nullptr;
     lv_obj_t* welcome_battery_label_ = nullptr;
     lv_obj_t* welcome_battery_icon_ = nullptr;
 

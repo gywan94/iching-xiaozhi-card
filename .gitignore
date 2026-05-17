@@ -30,3 +30,9 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.log
+
+# Claude esp-idf-build skill activation script
+_esp_idf_activate.bat
+
+# Nested local clone of this repo (used for parallel build testing)
+iching-xiaozhi-card/

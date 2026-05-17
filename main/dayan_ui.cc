@@ -14,6 +14,7 @@
 LV_FONT_DECLARE(font_puhui_16_1);
 LV_FONT_DECLARE(font_awesome_16_4);
 LV_FONT_DECLARE(font_iching_patch_16_1);
+LV_IMAGE_DECLARE(shutdown_image);
 
 namespace {
 constexpr int kFrameW = 170;
@@ -282,14 +283,36 @@ void DayanUi::Build() {
     lv_label_set_text(detail_text_, "详情内容");
 
     scr_shutdown_ = lv_obj_create(nullptr);
-    lv_obj_set_style_text_font(scr_shutdown_, text_font_, 0);
-    lv_obj_set_style_bg_color(scr_shutdown_, lv_color_white(), 0);
-    lv_obj_set_style_text_color(scr_shutdown_, lv_color_black(), 0);
+    // 画面铺满黑色作底，整个 176x264 显示生成器导出的关机插画。
+    lv_obj_set_style_bg_color(scr_shutdown_, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(scr_shutdown_, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(scr_shutdown_, 0, 0);
+    lv_obj_set_style_border_width(scr_shutdown_, 0, 0);
     lv_obj_clear_flag(scr_shutdown_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t* shutdown_label = lv_label_create(scr_shutdown_);
-    lv_obj_set_style_text_font(shutdown_label, text_font_, 0);
-    lv_label_set_text(shutdown_label, "大衍筮法已经关机");
-    lv_obj_center(shutdown_label);
+    lv_obj_t* shutdown_img = lv_image_create(scr_shutdown_);
+    lv_image_set_src(shutdown_img, &shutdown_image);
+    lv_obj_center(shutdown_img);
+
+    // 系统级提示页：低电倒计时、电池过放等场景使用。
+    scr_system_tip_ = lv_obj_create(nullptr);
+    lv_obj_set_style_text_font(scr_system_tip_, text_font_, 0);
+    lv_obj_set_style_bg_color(scr_system_tip_, lv_color_white(), 0);
+    lv_obj_set_style_text_color(scr_system_tip_, lv_color_black(), 0);
+    lv_obj_clear_flag(scr_system_tip_, LV_OBJ_FLAG_SCROLLABLE);
+    system_tip_title_ = lv_label_create(scr_system_tip_);
+    lv_obj_set_style_text_font(system_tip_title_, text_font_, 0);
+    lv_label_set_long_mode(system_tip_title_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(system_tip_title_, 160);
+    lv_obj_set_style_text_align(system_tip_title_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(system_tip_title_, "");
+    lv_obj_align(system_tip_title_, LV_ALIGN_CENTER, 0, -24);
+    system_tip_body_ = lv_label_create(scr_system_tip_);
+    lv_obj_set_style_text_font(system_tip_body_, text_font_, 0);
+    lv_label_set_long_mode(system_tip_body_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(system_tip_body_, 160);
+    lv_obj_set_style_text_align(system_tip_body_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(system_tip_body_, "");
+    lv_obj_align(system_tip_body_, LV_ALIGN_CENTER, 0, 24);
 }
 
 const lv_font_t* DayanUi::ResolveTextFont() {
@@ -336,6 +359,12 @@ void DayanUi::UpdateWelcomeBattery() {
     char text[16];
     std::snprintf(text, sizeof(text), "%u%%", static_cast<unsigned>(level));
     lv_label_set_text(welcome_battery_label_, text);
+    // 充电中（含预充/充电/已充满）统一显示闪电图标，便于用户一眼分辨外接电源状态。
+    const int charge_state = BoardGetChargeState();
+    if (charge_state > 0) {
+        lv_label_set_text(welcome_battery_icon_, FONT_AWESOME_BATTERY_CHARGING);
+        return;
+    }
     // 按电量区间切换图标，视觉风格与 xiaozhi-card 保持一致。
     const char* icon = FONT_AWESOME_BATTERY_EMPTY;
     if (level >= 80) {
@@ -348,6 +377,17 @@ void DayanUi::UpdateWelcomeBattery() {
         icon = FONT_AWESOME_BATTERY_1;
     }
     lv_label_set_text(welcome_battery_icon_, icon);
+}
+
+void DayanUi::ShowSystemTip(const char* title, const char* body) {
+    if (scr_system_tip_ == nullptr) {
+        return;
+    }
+    lv_label_set_text(system_tip_title_, title != nullptr ? title : "");
+    lv_label_set_text(system_tip_body_, body != nullptr ? body : "");
+    if (lv_screen_active() != scr_system_tip_) {
+        lv_screen_load(scr_system_tip_);
+    }
 }
 
 void DayanUi::ShowIntro() {

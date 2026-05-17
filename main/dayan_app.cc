@@ -4,18 +4,20 @@
 #include "dayan_data.h"
 #include "driver/gpio.h"
 #include "esp_check.h"
-#include "esp_sleep.h"
+#include "esp_lvgl_port.h"
 #include "esp_log.h"
+#include "esp_sleep.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#include <cstdio>
 
 namespace {
 constexpr char kTag[] = "dayan_app";
 constexpr gpio_num_t kUserButtonGpio = GPIO_NUM_21;
 constexpr int kButtonPollMs = 20;
 constexpr int kDoubleClickWindowMs = 350;
-constexpr int kShutdownDelayMs = 1200;
 }
 
 void DayanApp::UpdateActivity() {
@@ -40,15 +42,100 @@ void DayanApp::Start() {
         ShowResultPage();
     };
 
+    // 同步构建 UI（LVGL 已就绪），确保 GuardBatteryAtStartup 能立刻使用 SystemTip 提示页。
+    lvgl_port_lock(0);
+    ui_.Build();
+    lvgl_port_unlock();
+
+    // 电池过放保护：BQ27220 探测不到则进低电提示 + 时间递增的深睡重试，与 m5stack StartUp 对齐。
+    GuardBatteryAtStartup();
+
     lv_async_call(
         [](void* user_data) {
             auto* self = static_cast<DayanApp*>(user_data);
-            self->ui_.Build();
             self->ui_.ShowWelcome();
         },
         this);
     InitUserButton();
     InitIdleWatchdog();
+    InitBatteryWatchdog();
+}
+
+void DayanApp::GuardBatteryAtStartup() {
+    if (BoardIsGaugePresent()) {
+        return;
+    }
+    // RTC 内存保留：跨深睡递增睡眠时长，避免短时反复唤醒消耗。
+    static RTC_DATA_ATTR int sleep_retry_count = 0;
+    if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) {
+        sleep_retry_count = 0;
+    }
+    int sleep_sec = 10 + sleep_retry_count * 10;
+    if (sleep_sec > 60) {
+        sleep_sec = 60;
+    }
+    ++sleep_retry_count;
+
+    lvgl_port_lock(0);
+    ui_.ShowSystemTip("低电量充电中", "请等待");
+    lv_refr_now(nullptr);
+    lvgl_port_unlock();
+
+    ESP_LOGW(kTag, "battery not detected, deep sleep %d sec then retry", sleep_sec);
+    esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(sleep_sec) * 1000000ULL);
+    esp_deep_sleep_start();
+}
+
+void DayanApp::InitBatteryWatchdog() {
+    // 每秒检查一次电池电压：<3.5V 且未充电 → 倒计时 5 秒后关机；充电中只提示不关机。
+    xTaskCreatePinnedToCore(BatteryTask, "dayan_bat", 4096, this, 2, &battery_task_, 0);
+}
+
+void DayanApp::BatteryTask(void* arg) {
+    auto* self = static_cast<DayanApp*>(arg);
+    int countdown = kLowVoltageGraceSec;
+    bool showing_tip = false;
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        const int volt_mv = BoardGetBatteryVoltageMv();
+        if (volt_mv < 0) {
+            // BQ27220 暂时读不到（瞬态错误）；跳过本轮，等下次再判定。
+            continue;
+        }
+        if (volt_mv >= kLowVoltageMv) {
+            countdown = kLowVoltageGraceSec;
+            if (showing_tip) {
+                // 电压恢复（用户已插电充电）：从低电提示页切回首页。
+                lvgl_port_lock(0);
+                self->ui_.ShowWelcome();
+                lvgl_port_unlock();
+                showing_tip = false;
+            }
+            continue;
+        }
+        const int state = BoardGetChargeState();
+        if (state > 0) {
+            // 充电中：只提示，不关机
+            countdown = kLowVoltageGraceSec;
+            lvgl_port_lock(0);
+            self->ui_.ShowSystemTip("电量低", "充电中…请等待");
+            lvgl_port_unlock();
+            showing_tip = true;
+            continue;
+        }
+        // 未充电 → 倒计时关机
+        char title[32];
+        std::snprintf(title, sizeof(title), "电量低 %d 秒后关机", countdown);
+        lvgl_port_lock(0);
+        self->ui_.ShowSystemTip(title, "请尽快充电");
+        lvgl_port_unlock();
+        showing_tip = true;
+        if (countdown-- <= 0) {
+            ESP_LOGW(kTag, "low voltage <%d mV -> shutdown", kLowVoltageMv);
+            self->DoShutdown();
+            countdown = kLowVoltageGraceSec;
+        }
+    }
 }
 
 void DayanApp::InitUserButton() {
@@ -85,8 +172,14 @@ void DayanApp::IdleTask(void* arg) {
 }
 
 void DayanApp::DoShutdown() {
+    // 严格对齐 m5stack/XiaoZhi-Card 的 Shutdown() 流程：
+    // 1) 充电中拒绝关机并提示；2) 同步加载关机页 + 立刻刷新 EPD；3) 进入运输模式。
+    // 不再回退到 esp_deep_sleep_start —— shipping mode 失败时直接返回，避免在硬件不切电时
+    // 仍以高功耗形式停留在深睡眠，掩盖问题。
+    ESP_LOGI(kTag, "Shutdown");
+
     if (BoardIsExternalPower()) {
-        ESP_LOGI(kTag, "充电/外接电源，不进入深睡关机（同 xiaozhi-card 充电中不能关机）");
+        ESP_LOGI(kTag, "充电中不能关机");
         lv_async_call(
             [](void* user_data) {
                 static_cast<DayanApp*>(user_data)->ui_.ShowChargingNoShutdownTip();
@@ -94,20 +187,13 @@ void DayanApp::DoShutdown() {
             this);
         return;
     }
-    // 显示关机页面，留足时间让墨水屏刷新完，再进入深睡眠。
-    lv_async_call(
-        [](void* user_data) {
-            auto* self = static_cast<DayanApp*>(user_data);
-            self->ui_.ShowShutdown();
-        },
-        this);
-    vTaskDelay(pdMS_TO_TICKS(kShutdownDelayMs));
-    if (BoardHardShutdown()) {
-        // 正常情况下硬关机会掉电，不会返回；返回表示芯片不支持或执行失败。
-        ESP_LOGW(kTag, "hard shutdown did not power off, fallback to deep sleep");
-    }
-    esp_sleep_enable_ext1_wakeup(BIT64(kUserButtonGpio), ESP_EXT1_WAKEUP_ANY_LOW);
-    esp_deep_sleep_start();
+
+    lvgl_port_lock(0);
+    ui_.ShowShutdown();
+    lv_refr_now(nullptr);
+    lvgl_port_unlock();
+
+    BoardHardShutdown();
 }
 
 void DayanApp::ButtonTask(void* arg) {
