@@ -83,6 +83,8 @@ void DayanApp::GuardBatteryAtStartup() {
 
     ESP_LOGW(kTag, "battery not detected, deep sleep %d sec then retry", sleep_sec);
     esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(sleep_sec) * 1000000ULL);
+    // 同时允许按键提前唤醒，避免用户在长重试间隔里干等。
+    esp_sleep_enable_ext1_wakeup(BIT64(kUserButtonGpio), ESP_EXT1_WAKEUP_ANY_LOW);
     esp_deep_sleep_start();
 }
 

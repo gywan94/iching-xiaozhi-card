@@ -47,7 +47,45 @@ Aw32001* g_charger = nullptr;
 }  // namespace
 
 esp_err_t BoardInitDisplayAndTouch(BoardDisplayContext& ctx) {
-    // EPD 与 SD 共用 SPI2，总线先初始化，后续屏幕和存储都复用。
+    // ---- 与 m5stack/XiaoZhi-Card 上电顺序对齐 ----
+    // I2C(总线) → AW32001(充电) → BQ27220(电量) → SPI(总线) → EPD(panel+首刷)
+    //   → Touch → LVGL port
+    // 关键差异：AW32001 必须在 EPD 全屏首刷之前完成 SetDischargeCurrent(2800mA) 等配置，
+    // 否则弱电池下首刷的电流峰值可能触发默认放电限保护，导致开机 brownout/重启。
+
+    // 1. I2C 总线（AW32001 / BQ27220 / 触摸共用）
+    i2c_master_bus_config_t i2c_cfg = {};
+    i2c_cfg.i2c_port = I2C_NUM_0;
+    i2c_cfg.sda_io_num = kPinI2cSda;
+    i2c_cfg.scl_io_num = kPinI2cScl;
+    i2c_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
+    i2c_cfg.glitch_ignore_cnt = 7;
+    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&i2c_cfg, &g_i2c_bus), kTag, "i2c init failed");
+
+    // 2. AW32001 充电芯片（先于 EPD 配好放电限/充电参数）
+    // 直接构造、不预先 probe —— 与 m5stack 行为一致，避免 probe 假阴性导致硬关机失能。
+    if (g_charger == nullptr) {
+        g_charger = new Aw32001(g_i2c_bus, kAw32001Address);
+        g_charger->SetShippingMode(false);               // 关闭运输模式
+        g_charger->SetNtcFunction(false);                // 未使用 NTC
+        g_charger->SetDischargeCurrent(2800);            // 最大放电电流
+        g_charger->SetChargeCurrent(260);                // 最大充电电流
+        g_charger->SetChargeVoltage(4200);               // 满电电压 4.2V
+        g_charger->SetPreChargeCurrent(31);              // 预充电电流
+        g_charger->SetPrechargeToFastchargeThreshold(0); // 预充转快充阈值
+        g_charger->SetCharge(true);                      // 开启充电
+        ESP_LOGI(kTag, "aw32001 charger initialized");
+    }
+
+    // 3. BQ27220 电量计
+    if (g_gauge == nullptr) {
+        g_gauge = new Bq27220(g_i2c_bus, BQ27220_I2C_ADDRESS);
+        if (!g_gauge->detect()) {
+            ESP_LOGW(kTag, "bq27220 detect failed");
+        }
+    }
+
+    // 4. SPI 总线（EPD 与 SD 共用 SPI2）
     spi_bus_config_t spi_cfg = {};
     spi_cfg.sclk_io_num = kPinSck;
     spi_cfg.mosi_io_num = kPinMosi;
@@ -57,6 +95,7 @@ esp_err_t BoardInitDisplayAndTouch(BoardDisplayContext& ctx) {
     spi_cfg.max_transfer_sz = kDisplayWidth * kDisplayHeight;
     ESP_RETURN_ON_ERROR(spi_bus_initialize(kSpiHost, &spi_cfg, SPI_DMA_CH_AUTO), kTag, "spi init failed");
 
+    // 5. EPD 面板
     esp_lcd_panel_io_spi_config_t io_cfg = {};
     io_cfg.dc_gpio_num = kPinDc;
     io_cfg.cs_gpio_num = kPinCs;
@@ -77,7 +116,8 @@ esp_err_t BoardInitDisplayAndTouch(BoardDisplayContext& ctx) {
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_gdey027t91(ctx.panel_io, &panel_cfg, &ctx.panel), kTag, "new panel failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(ctx.panel), kTag, "panel reset failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(ctx.panel), kTag, "panel init failed");
-    // 仿照 xiaozhi-card：开机先全黑再全白，降低首屏残影。
+
+    // 6. 黑白预刷屏（charger 已配置，此时拉电流安全）
     uint8_t* buf = static_cast<uint8_t*>(heap_caps_malloc(kDisplayWidth * kDisplayHeight, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
     if (buf != nullptr) {
         memset(buf, 0x00, kDisplayWidth * kDisplayHeight);
@@ -89,15 +129,7 @@ esp_err_t BoardInitDisplayAndTouch(BoardDisplayContext& ctx) {
         free(buf);
     }
 
-    // I2C 同时用于触摸与电量计芯片。
-    i2c_master_bus_config_t i2c_cfg = {};
-    i2c_cfg.i2c_port = I2C_NUM_0;
-    i2c_cfg.sda_io_num = kPinI2cSda;
-    i2c_cfg.scl_io_num = kPinI2cScl;
-    i2c_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
-    i2c_cfg.glitch_ignore_cnt = 7;
-    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&i2c_cfg, &g_i2c_bus), kTag, "i2c init failed");
-
+    // 7. 触摸
     esp_lcd_panel_io_handle_t touch_io = nullptr;
     esp_lcd_panel_io_i2c_config_t touch_io_cfg = {};
     touch_io_cfg.dev_addr = ESP_LCD_TOUCH_IO_I2C_FT5x06_ADDRESS;
@@ -128,6 +160,7 @@ esp_err_t BoardInitDisplayAndTouch(BoardDisplayContext& ctx) {
     };
     ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_ft5x06(touch_io, &touch_cfg, &ctx.touch), kTag, "touch init failed");
 
+    // 8. LVGL
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
     port_cfg.task_stack = 16 * 1024;
     port_cfg.task_priority = 1;
@@ -175,31 +208,6 @@ esp_err_t BoardInitDisplayAndTouch(BoardDisplayContext& ctx) {
     if (ctx.lv_touch == nullptr) {
         ESP_LOGE(kTag, "lv touch add failed");
         return ESP_FAIL;
-    }
-    if (g_gauge == nullptr && g_i2c_bus != nullptr) {
-        // 电量计仅初始化一次，供首页实时电量显示使用。
-        g_gauge = new Bq27220(g_i2c_bus, BQ27220_I2C_ADDRESS);
-        if (!g_gauge->detect()) {
-            ESP_LOGW(kTag, "bq27220 detect failed");
-        }
-    }
-    if (g_charger == nullptr && g_i2c_bus != nullptr) {
-        const esp_err_t probe_ret = i2c_master_probe(g_i2c_bus, kAw32001Address, pdMS_TO_TICKS(100));
-        if (probe_ret == ESP_OK) {
-            g_charger = new Aw32001(g_i2c_bus, kAw32001Address);
-            // 与 xiaozhi-card 初始化策略对齐
-            g_charger->SetShippingMode(false);               // 关闭运输模式
-            g_charger->SetNtcFunction(false);                // 未使用 NTC
-            g_charger->SetDischargeCurrent(2800);            // 最大放电电流
-            g_charger->SetChargeCurrent(260);                // 最大充电电流
-            g_charger->SetChargeVoltage(4200);               // 满电电压 4.2V
-            g_charger->SetPreChargeCurrent(31);              // 预充电电流
-            g_charger->SetPrechargeToFastchargeThreshold(0); // 预充转快充阈值
-            g_charger->SetCharge(true);                      // 开启充电
-            ESP_LOGI(kTag, "aw32001 charger detected");
-        } else {
-            ESP_LOGW(kTag, "aw32001 not found, hard shutdown disabled");
-        }
     }
     return ESP_OK;
 }
